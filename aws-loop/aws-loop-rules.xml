@@ -1,0 +1,97 @@
+<!--
+  Rules for the aws-loop JSON logs (job results and health). Every instance writes its own file,
+  /var/log/aws-loop/aws-loop.json for the default one and aws-loop-NAME.json for named ones, and marks
+  its lines with "instance". One localfile block with a wildcard covers all of them.
+  1. Add to ossec.conf:
+       <localfile>
+         <location>/var/log/aws-loop/aws-loop*.json</location>
+         <log_format>json</log_format>
+       </localfile>
+  2. Add the rules below to /var/ossec/etc/rules/local_rules.xml
+  3. /var/ossec/bin/wazuh-analysisd -t && systemctl restart wazuh-manager
+  No custom decoder is needed: log_format json uses the built-in JSON decoder and the rules match its
+  fields. The log identifies itself with "app":"aws-loop" (not "integration", which Wazuh rule 80200 claims).
+-->
+<group name="amazon,aws,aws_loop,">
+
+  <rule id="100260" level="0">
+    <decoded_as>json</decoded_as>
+    <field name="app">^aws-loop$</field>
+    <description>AWS loop event</description>
+  </rule>
+
+  <!-- job results -->
+  <rule id="100261" level="3">
+    <if_sid>100260</if_sid>
+    <field name="kind">^job$</field>
+    <field name="result">^ok$|^empty$|^detached$</field>
+    <description>AWS loop [$(instance)]: $(type) $(name) $(result), $(files_found) files in $(seconds)s</description>
+  </rule>
+
+  <rule id="100262" level="7">
+    <if_sid>100260</if_sid>
+    <field name="kind">^job$</field>
+    <field name="result">^fail$</field>
+    <description>AWS loop [$(instance)]: $(type) $(name) FAILED exit $(exit): $(error)</description>
+  </rule>
+
+  <rule id="100263" level="8">
+    <if_sid>100260</if_sid>
+    <field name="kind">^job$</field>
+    <field name="result">^denied$</field>
+    <description>AWS loop [$(instance)]: $(type) $(name) PERMISSION or CREDENTIAL error: $(error)</description>
+    <group>access_denied,</group>
+  </rule>
+
+  <rule id="100264" level="8">
+    <if_sid>100260</if_sid>
+    <field name="kind">^job$</field>
+    <field name="result">^locked$|^stalled$|^killed$</field>
+    <description>AWS loop [$(instance)]: $(type) $(name) $(result) after $(seconds)s: $(error)</description>
+  </rule>
+
+  <!-- health, one line per round -->
+  <rule id="100270" level="0">
+    <if_sid>100260</if_sid>
+    <field name="kind">^health$</field>
+    <description>AWS loop health [$(instance)], round $(round)</description>
+  </rule>
+
+  <rule id="100271" level="10">
+    <if_sid>100270</if_sid>
+    <field name="manager_socket">^missing$</field>
+    <description>AWS loop health [$(instance)]: Wazuh analysisd socket missing, events cannot be delivered</description>
+  </rule>
+
+  <rule id="100272" level="7">
+    <if_sid>100270</if_sid>
+    <field name="jobs_fail" type="pcre2">^[1-9]\d*$</field>
+    <description>AWS loop health [$(instance)]: $(jobs_fail) job(s) failed in round $(round)</description>
+  </rule>
+
+  <rule id="100273" level="8">
+    <if_sid>100270</if_sid>
+    <field name="jobs_denied" type="pcre2">^[1-9]\d*$</field>
+    <description>AWS loop health [$(instance)]: $(jobs_denied) job(s) with permission or credential errors in round $(round)</description>
+    <group>access_denied,</group>
+  </rule>
+
+  <rule id="100274" level="8">
+    <if_sid>100270</if_sid>
+    <field name="oldest_detached_s" type="pcre2">^[1-9]\d{4,}$</field>
+    <description>AWS loop health [$(instance)]: a detached job has been running for $(oldest_detached_s)s</description>
+  </rule>
+
+  <rule id="100275" level="7">
+    <if_sid>100270</if_sid>
+    <field name="analysisd_dropped_delta" type="pcre2">^[1-9]\d*$</field>
+    <description>AWS loop health [$(instance)]: analysisd dropped $(analysisd_dropped_delta) events since the last round, queue at $(analysisd_queue_pct) percent</description>
+  </rule>
+
+  <rule id="100276" level="8">
+    <if_sid>100270</if_sid>
+    <field name="disk_free_log_pct" type="pcre2">^\d$</field>
+    <description>AWS loop health [$(instance)]: disk for logs almost full, $(disk_free_log_pct) percent free</description>
+  </rule>
+
+</group>

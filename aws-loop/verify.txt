@@ -1,0 +1,42 @@
+# Manual test before adding a line to aws-jobs.conf. Run as root. Same line as the config plus --debug 2.
+# Good run: "Marker:" then "Found new log:" lines then "DB Maintenance". No "Found new log" = no new files yet.
+# Add --aws_profile default at the end only if /root/.aws/credentials is used instead of an EC2 role.
+
+# CloudTrail
+/var/ossec/wodles/aws/aws-s3 --bucket cloudtrail-bucket --type cloudtrail --regions ap-south-1 --only_logs_after 2026-SEP-18 --debug 2
+
+# VPC Flow Logs
+/var/ossec/wodles/aws/aws-s3 --bucket vpc-bucket --type vpcflow --regions ap-south-1 --only_logs_after 2026-SEP-18 --debug 2
+
+# Config
+/var/ossec/wodles/aws/aws-s3 --bucket config-bucket --type config --regions ap-south-1 --only_logs_after 2026-SEP-18 --debug 2
+
+# GuardDuty
+/var/ossec/wodles/aws/aws-s3 --bucket guardduty-bucket --type guardduty --only_logs_after 2026-SEP-18 --debug 2
+
+# WAF (one line per web ACL folder)
+/var/ossec/wodles/aws/aws-s3 --bucket waf-bucket --type waf --trail_prefix AWSLogs/123456789012/WAFLogs/cloudfront/acl-name --only_logs_after 2026-SEP-18 --debug 2
+
+# Inspector
+/var/ossec/wodles/aws/aws-s3 --service inspector --regions ap-south-1 --debug 2
+
+# CloudWatch Logs
+/var/ossec/wodles/aws/aws-s3 --service cloudwatchlogs --aws_log_groups /aws/lambda/app --regions ap-south-1 --only_logs_after 2026-SEP-18 --debug 2
+
+# ECR image scanning
+/var/ossec/wodles/aws/aws-s3 --service cloudwatchlogs --aws_log_groups /aws/ecr/image-scan-findings/repo-name --regions ap-south-1 --only_logs_after 2026-SEP-18 --debug 2
+
+# Security Hub
+/var/ossec/wodles/aws/aws-s3 --subscriber security_hub --queue securityhub-queue --debug 2
+
+# CloudFront
+/var/ossec/wodles/aws/aws-s3 --subscriber buckets --queue cloudfront-queue --debug 2
+
+# S3 server access logs
+/var/ossec/wodles/aws/aws-s3 --bucket s3-access-bucket --type server_access --only_logs_after 2026-SEP-18 --debug 2
+
+# MongoDB Atlas
+/var/ossec/wodles/aws/aws-s3 --subscriber buckets --queue mongodb-queue --debug 2
+
+# Count alerts per source after the runs
+for s in cloudtrail vpc config guardduty waf s3_server_access inspector security_hub custom; do printf '%-18s %s\n' $s "$(grep -c "\"source\":\"$s\"" /var/ossec/logs/alerts/alerts.json)"; done

@@ -1,0 +1,4 @@
+.claude/
+*.zip
+*.tmp
+sysmon/

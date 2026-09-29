@@ -1,0 +1,78 @@
+<!--
+  MongoDB Atlas logs pushed to S3 by the Atlas log export and collected with the Wazuh custom buckets
+  subscriber (aws-s3 with the subscriber buckets option). Atlas wraps every mongod line as a JSON string
+  inside the "log" field of its envelope, and the Wazuh JSON decoder cannot expand a JSON string nested
+  in JSON. These decoders read the fields out of that string with regex and publish them as mongodb.*.
+
+  Use this OR the module patch nested-json.sh, never both: after the patch the event no longer contains
+  the escaped string these decoders look for, and a matching child decoder would suppress the JSON
+  fields of the event.
+
+  How the regexes work (for maintenance):
+    \x5c is a literal backslash: the raw event contains \" around every inner value.
+    Every attr value is read with an optional lookahead of the form (?=(?|.*?"KEY\x5c":\x5c"([^\x5c]*)|()))
+    The branch reset group (?| gives both alternatives the same capture number, so the field holds the
+    value when the key is present and an empty string when it is absent. Order inside attr does not
+    matter and a missing key never makes the line fail. Keys that appear under several names in
+    different MongoDB versions are read with alternation, for example (?:principalName|user).
+    Wazuh limits a regex to 1023 characters and a decoder to 32 fields, so the lines are split into
+    families by message and the syntax is kept short. The last mongod decoder has no message filter
+    and takes every other line. Wazuh tries the children in file order and the first prematch wins.
+    Only one child decoder is ever applied to an event, so fields cannot be spread over siblings.
+
+  Fields on every mongod/mongos line:
+    mongodb.severity, mongodb.component, mongodb.id, mongodb.ctx, mongodb.msg,
+    mongodb.host, mongodb.group_id, mongodb.cluster_id, mongodb.cluster, mongodb.log_type, mongodb.timestamp
+  Authentication messages (Authentication failed / succeeded, Successfully authenticated,
+  Connection not authenticating): mongodb.user, mongodb.db, mongodb.mechanism, mongodb.remote,
+    mongodb.error, mongodb.result, mongodb.speculative, mongodb.is_cluster_member, mongodb.driver_name,
+    mongodb.driver_version, mongodb.platform, mongodb.os_type, mongodb.os_arch, mongodb.app_name,
+    mongodb.conversation_micros
+  Connection messages (Connection accepted / ended): mongodb.remote, mongodb.local, mongodb.connection_id,
+    mongodb.connection_count, mongodb.connection_uuid, mongodb.is_load_balanced, mongodb.is_proxy_unix_sock,
+    mongodb.source_client
+  Every other line (slow queries, command errors, everything else): mongodb.ns, mongodb.type,
+    mongodb.command, mongodb.duration_ms, mongodb.plan_summary, mongodb.keys_examined, mongodb.docs_examined,
+    mongodb.nreturned, mongodb.reslen, mongodb.app_name, mongodb.remote, mongodb.errmsg, mongodb.code,
+    mongodb.code_name, mongodb.error
+  Audit lines (mongod-audit, mongos-audit): mongodb.atype, mongodb.local_ip, mongodb.local_port,
+    mongodb.remote_ip, mongodb.remote_port, mongodb.user, mongodb.db, mongodb.mechanism, mongodb.ns,
+    mongodb.result and the envelope fields
+  Values that are whole objects or arrays (command body, roles, metrics summary) stay in the full log.
+  Events matched here keep the decoder name json but do not carry the aws.* fields, so they leave the
+  built-in AWS rule 80200 and are handled by local_rules_mongodb_atlas_decoder.xml.
+  Install: copy to /var/ossec/etc/decoders/ (owner root:wazuh, mode 660), then
+    /var/ossec/bin/wazuh-analysisd -t and systemctl restart wazuh-manager
+-->
+
+<!-- authentication messages -->
+<decoder name="mongodb-atlas-auth">
+  <parent>json</parent>
+  <prematch type="pcre2">\x5c"msg\x5c":\x5c"(?:Authentication failed|Authentication succeeded|Successfully authenticated|Connection not authenticating)\x5c".*"mongodb\.log\.type": ?"mongo[ds]"</prematch>
+  <regex type="pcre2">\x5c"s\x5c":\x5c"(\w)\x5c",\x5c"c\x5c":\x5c"(\w+)\x5c",\x5c"id\x5c":(\d+),\x5c"ctx\x5c":\x5c"([^\x5c]*)\x5c",\x5c"msg\x5c":\x5c"(.*?[^\x5c])\x5c"(?=(?|.*?"(?:principalName|user)\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"(?:\w+Database|db)\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"mechanism\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"(?:remote|client)\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"error\x5c":\x5c"(.*?[^\x5c])\x5c"|()))(?=(?|.*?"result\x5c":(\w+)|()))(?=(?|.*?"(?:is)?[sS]peculative\x5c":(\w+)|()))(?=(?|.*?"isClusterMember\x5c":(\w+)|()))(?=(?|.*?"driver\x5c":\{\x5c"name\x5c":\x5c"([^\x5c]*).*?"version\x5c":\x5c"([^\x5c]*)|()()))(?=(?|.*?"platform\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"os\x5c":\{\x5c"type\x5c":\x5c"([^\x5c]*).*?"architecture\x5c":\x5c"([^\x5c]*)|()()))(?=(?|.*?"application\x5c":\{\x5c"name\x5c":\x5c"(.*?[^\x5c])\x5c"|()))(?=(?|.*?"micros\x5c":(\d+)|())).*?host.name": ?"([^"]*)".*?group.id": ?"([^"]*)".*?cluster.name": ?"([^"]*)".*?cluster.name": ?"([^"]*)".*?log.type": ?"([^"]*)".*?timestamp": ?"([^"]*)"</regex>
+  <order>mongodb.severity, mongodb.component, mongodb.id, mongodb.ctx, mongodb.msg, mongodb.user, mongodb.db, mongodb.mechanism, mongodb.remote, mongodb.error, mongodb.result, mongodb.speculative, mongodb.is_cluster_member, mongodb.driver_name, mongodb.driver_version, mongodb.platform, mongodb.os_type, mongodb.os_arch, mongodb.app_name, mongodb.conversation_micros, mongodb.host, mongodb.group_id, mongodb.cluster_id, mongodb.cluster, mongodb.log_type, mongodb.timestamp</order>
+</decoder>
+
+<!-- connection messages -->
+<decoder name="mongodb-atlas-connection">
+  <parent>json</parent>
+  <prematch type="pcre2">\x5c"msg\x5c":\x5c"Connection (?:accepted|ended)\x5c".*"mongodb\.log\.type": ?"mongo[ds]"</prematch>
+  <regex type="pcre2">\x5c"s\x5c":\x5c"(\w)\x5c",\x5c"c\x5c":\x5c"(\w+)\x5c",\x5c"id\x5c":(\d+),\x5c"ctx\x5c":\x5c"([^\x5c]*)\x5c",\x5c"msg\x5c":\x5c"(.*?[^\x5c])\x5c"(?=(?|.*?"remote\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"local\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"connectionId\x5c":(\d+)|()))(?=(?|.*?"connectionCount\x5c":(\d+)|()))(?=(?|.*?"\$uuid\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"isLoadBalanced\x5c":(\w+)|()))(?=(?|.*?"isProxyUnixSock\x5c":(\w+)|()))(?=(?|.*?"sourceClient\x5c":\x5c"([^\x5c]*)|())).*?host.name": ?"([^"]*)".*?group.id": ?"([^"]*)".*?cluster.name": ?"([^"]*)".*?cluster.name": ?"([^"]*)".*?log.type": ?"([^"]*)".*?timestamp": ?"([^"]*)"</regex>
+  <order>mongodb.severity, mongodb.component, mongodb.id, mongodb.ctx, mongodb.msg, mongodb.remote, mongodb.local, mongodb.connection_id, mongodb.connection_count, mongodb.connection_uuid, mongodb.is_load_balanced, mongodb.is_proxy_unix_sock, mongodb.source_client, mongodb.host, mongodb.group_id, mongodb.cluster_id, mongodb.cluster, mongodb.log_type, mongodb.timestamp</order>
+</decoder>
+
+<!-- every other mongod or mongos line: slow queries, command errors, and anything else -->
+<decoder name="mongodb-atlas-line">
+  <parent>json</parent>
+  <prematch type="pcre2">"mongodb\.log\.type": ?"mongo[ds]"</prematch>
+  <regex type="pcre2">\x5c"s\x5c":\x5c"(\w)\x5c",\x5c"c\x5c":\x5c"(\w+)\x5c",\x5c"id\x5c":(\d+),\x5c"ctx\x5c":\x5c"([^\x5c]*)\x5c",\x5c"msg\x5c":\x5c"(.*?[^\x5c])\x5c"(?=(?|.*?"ns\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"type\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"command\x5c":\{\x5c"(\w+)|()))(?=(?|.*?"durationMillis\x5c":(\d+)|()))(?=(?|.*?"planSummary\x5c":\x5c"(.*?[^\x5c])\x5c"|()))(?=(?|.*?"keysExamined\x5c":(\d+)|()))(?=(?|.*?"docsExamined\x5c":(\d+)|()))(?=(?|.*?"nreturned\x5c":(\d+)|()))(?=(?|.*?"reslen\x5c":(\d+)|()))(?=(?|.*?"appName\x5c":\x5c"(.*?[^\x5c])\x5c"|()))(?=(?|.*?"remote\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"errmsg\x5c":\x5c"(.*?[^\x5c])\x5c"|()))(?=(?|.*?"code\x5c":(\d+)|()))(?=(?|.*?"codeName\x5c":\x5c"(\w+)|()))(?=(?|.*?"error\x5c":\x5c"(.*?[^\x5c])\x5c"|())).*?host.name": ?"([^"]*)".*?group.id": ?"([^"]*)".*?cluster.name": ?"([^"]*)".*?cluster.name": ?"([^"]*)".*?log.type": ?"([^"]*)".*?timestamp": ?"([^"]*)"</regex>
+  <order>mongodb.severity, mongodb.component, mongodb.id, mongodb.ctx, mongodb.msg, mongodb.ns, mongodb.type, mongodb.command, mongodb.duration_ms, mongodb.plan_summary, mongodb.keys_examined, mongodb.docs_examined, mongodb.nreturned, mongodb.reslen, mongodb.app_name, mongodb.remote, mongodb.errmsg, mongodb.code, mongodb.code_name, mongodb.error, mongodb.host, mongodb.group_id, mongodb.cluster_id, mongodb.cluster, mongodb.log_type, mongodb.timestamp</order>
+</decoder>
+
+<!-- mongod-audit and mongos-audit lines -->
+<decoder name="mongodb-atlas-audit">
+  <parent>json</parent>
+  <prematch type="pcre2">"mongodb\.log\.type": ?"mongo[ds]-audit"</prematch>
+  <regex type="pcre2">\x5c"atype\x5c":\x5c"(\w+)(?=(?|.*?"local\x5c":\{\x5c"ip\x5c":\x5c"([^\x5c]*)\x5c",\x5c"port\x5c":(\d+)|()()))(?=(?|.*?"remote\x5c":\{\x5c"ip\x5c":\x5c"([^\x5c]*)\x5c",\x5c"port\x5c":(\d+)|()()))(?=(?|.*?"users\x5c":\[\{\x5c"user\x5c":\x5c"([^\x5c]*)\x5c",\x5c"db\x5c":\x5c"([^\x5c]*)|.*?"param\x5c":\{[^}]*?"user\x5c":\x5c"([^\x5c]*)\x5c",\x5c"db\x5c":\x5c"([^\x5c]*)|()()))(?=(?|.*?"mechanism\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"ns\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"result\x5c":(\d+)|())).*?host.name": ?"([^"]*)".*?group.id": ?"([^"]*)".*?cluster.name": ?"([^"]*)".*?cluster.name": ?"([^"]*)".*?log.type": ?"([^"]*)".*?timestamp": ?"([^"]*)"</regex>
+  <order>mongodb.atype, mongodb.local_ip, mongodb.local_port, mongodb.remote_ip, mongodb.remote_port, mongodb.user, mongodb.db, mongodb.mechanism, mongodb.ns, mongodb.result, mongodb.host, mongodb.group_id, mongodb.cluster_id, mongodb.cluster, mongodb.log_type, mongodb.timestamp</order>
+</decoder>
