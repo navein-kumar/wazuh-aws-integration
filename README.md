@@ -54,10 +54,14 @@ Atlas log export writes each mongod line as a JSON string inside a JSON envelope
 decoder does not parse a JSON string nested in JSON, so the inner fields were invisible to rules.
 The folder [mongodb-atlas-decoder](mongodb-atlas-decoder/) offers two ways to handle that:
 
-- `local_decoder_mongodb_atlas.xml` with `local_rules_mongodb_atlas_decoder.xml`: sibling decoders
-  under the built in `json` decoder, as described in the Wazuh documentation, read the inner fields
-  out with regex and publish them as `mongodb.*` fields (user, client address, database, connection
-  details, slow query details, audit details). Rules show those values and can correlate on them.
+- `0005-mongodb-atlas-decoders.xml` with `local_rules_mongodb_atlas_decoder.xml`: two top level
+  decoders whose prematch only matches Atlas lines, with sibling child decoders as described in the
+  Wazuh documentation: the JSON plugin for the envelope (`aws.*` fields) and regexes for the inner
+  fields (`mongodb.*`: user, client address, database, connection details, slow query details, audit
+  details). Rules show those values and can correlate on them. The file name must keep sorting before
+  Wazuh's own `0006-json_decoders.xml`, because Wazuh loads decoder files by name and these decoders
+  must be tried before the built in `json` decoder. Nothing is attached to the `json` decoder, so
+  every other JSON source is decoded exactly as before.
 - `local_rules_mongodb_atlas_simple.xml` alone: no decoder, the rules match text inside the `aws.log`
   string, the approach used in the Wazuh blog on monitoring MongoDB Atlas. Nothing to maintain, but
   no fields, so descriptions cannot show the user or address.

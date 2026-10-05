@@ -3,36 +3,29 @@
   subscriber (aws-s3 with the subscriber buckets option). Atlas wraps every mongod line as a JSON string
   inside the "log" field of its envelope, and the Wazuh JSON decoder cannot expand a JSON string nested
   in JSON. These decoders read the fields out of that string with regex and publish them as mongodb.*.
-  The envelope itself is decoded by the normal JSON decoder, so the aws.* fields stay as for every other
-  AWS source: aws.host.name, aws.mongodb.customer.cluster.name, aws.mongodb.log.type, aws.timestamp,
-  aws.log_info.s3bucket and so on, and the built in AWS rule 80200 still matches.
+  The envelope itself is decoded by the normal JSON plugin, so the aws.* fields are present as for every
+  other AWS source: aws.host.name, aws.mongodb.customer.cluster.name, aws.mongodb.log.type, aws.timestamp,
+  aws.log_info.s3bucket and so on.
 
-  Use this OR the module patch nested-json.sh, never both.
+  KEEP THE FILE NAME. Wazuh loads all decoder files, built in and custom, sorted by file name only.
+  This file sorts before the built in 0006-json_decoders.xml, so its two top level decoders are tried
+  before the built in json decoder. Their prematch only matches MongoDB Atlas lines, so every other
+  JSON event never enters them and goes on to the built in json decoder exactly as before. Nothing is
+  attached to the built in json decoder. Renaming the file to anything sorting after 0006 would put it
+  behind the json decoder and it would never match.
 
-  Structure, following the Wazuh documentation on sibling decoders (JSON decoder page, "combining
-  plugin decoders with regular expressions"): decoders that share the same name under the same parent
-  are applied one after another to the same event, each adding its own fields. The first one carries
-  the prematch, the following ones must not. A regex that does not match an event is simply skipped.
-    mongodb-atlas        first:  prematch on mongod/mongos + the JSON plugin (envelope fields)
-                         then:   common fields, authentication fields, connection fields, other fields
-    mongodb-atlas-audit  first:  prematch on mongod-audit/mongos-audit + the JSON plugin
-                         then:   audit fields
-    json-default         no prematch, JSON plugin: every other JSON event (CloudTrail, GuardDuty, ...).
-                         Required and must stay last: once the json decoder has children, Wazuh no
-                         longer runs its own parsing for an event no child claims. It runs the same
-                         plugin the built in json decoder runs, so those events decode exactly as
-                         before. Verified with CloudTrail, GuardDuty, aws-loop, plain application JSON
-                         and Windows JSON events.
-  Load order: Wazuh loads decoder files sorted by file name, and children of json are tried in that
-  order. If any other custom decoder file in /var/ossec/etc/decoders/ also uses <parent>json</parent>,
-  this file must load after it, so that json-default is the last child. Naming this file with a
-  prefix that sorts last, for example zz_mongodb_atlas.xml, guarantees that. With no other custom
-  json children the name does not matter.
+  Structure (sibling decoders, as in the Wazuh documentation):
+    mongodb-atlas               top level, prematch on mongod/mongos lines
+      mongodb-atlas-fields      children sharing one name, applied one after another to the event:
+                                first the JSON plugin (envelope fields), then the common fields,
+                                authentication fields, connection fields, other fields
+    mongodb-atlas-audit         top level, prematch on mongod-audit/mongos-audit lines
+      mongodb-atlas-audit-fields  JSON plugin, then audit fields
+  Rules use <decoded_as>mongodb-atlas</decoded_as> and <decoded_as>mongodb-atlas-audit</decoded_as>.
   \x5c is a literal backslash: the raw event contains \" around every inner value.
   Attr values are read with optional lookaheads (?=(?|.*?"KEY\x5c":\x5c"([^\x5c]*)|())): the field
-  holds the value when the key exists and is empty when it does not, in any order. Keys that appear
-  under several names in different MongoDB versions are read with alternation.
-  Each regex must stay under 1024 characters (a Wazuh limit); the split into siblings keeps that easy.
+  holds the value when the key exists and is empty when it does not, in any order.
+  Each regex stays under 1024 characters (a Wazuh limit).
 
   Fields:
     every mongod/mongos line: mongodb.severity, mongodb.component, mongodb.id, mongodb.ctx, mongodb.msg
@@ -50,61 +43,56 @@
       mongodb.code_name, mongodb.error
     audit: mongodb.atype, mongodb.local_ip, mongodb.local_port, mongodb.remote_ip, mongodb.remote_port,
       mongodb.user, mongodb.db, mongodb.mechanism, mongodb.ns, mongodb.result
-  Values that are whole objects or arrays (command body, roles, metrics summary) stay in the full log.
-  Install: copy to /var/ossec/etc/decoders/ (owner root:wazuh, mode 660), then
+  Install: copy to /var/ossec/etc/decoders/0005-mongodb-atlas-decoders.xml (owner root:wazuh, mode 660), then
     /var/ossec/bin/wazuh-analysisd -t and systemctl restart wazuh-manager
 -->
 
-<!-- mongod and mongos lines: envelope through the JSON plugin -->
+<!-- mongod and mongos lines -->
 <decoder name="mongodb-atlas">
-  <parent>json</parent>
-  <prematch type="pcre2">"mongodb\.log\.type": ?"mongo[ds]"</prematch>
+  <prematch type="pcre2">^\{"integration": ?"aws".*"mongodb\.log\.type": ?"mongo[ds]"</prematch>
+</decoder>
+
+<decoder name="mongodb-atlas-fields">
+  <parent>mongodb-atlas</parent>
   <plugin_decoder>JSON_Decoder</plugin_decoder>
 </decoder>
 
-<!-- common fields of every line -->
-<decoder name="mongodb-atlas">
-  <parent>json</parent>
+<decoder name="mongodb-atlas-fields">
+  <parent>mongodb-atlas</parent>
   <regex type="pcre2">\x5c"s\x5c":\x5c"(\w)\x5c",\x5c"c\x5c":\x5c"(\w+)\x5c",\x5c"id\x5c":(\d+),\x5c"ctx\x5c":\x5c"([^\x5c]*)\x5c",\x5c"msg\x5c":\x5c"(.*?[^\x5c])\x5c"</regex>
   <order>mongodb.severity, mongodb.component, mongodb.id, mongodb.ctx, mongodb.msg</order>
 </decoder>
 
-<!-- authentication messages -->
-<decoder name="mongodb-atlas">
-  <parent>json</parent>
+<decoder name="mongodb-atlas-fields">
+  <parent>mongodb-atlas</parent>
   <regex type="pcre2">\x5c"msg\x5c":\x5c"(?:Authentication failed|Authentication succeeded|Successfully authenticated|Connection not authenticating)\x5c"(?=(?|.*?"(?:principalName|user)\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"(?:\w+Database|db)\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"mechanism\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"(?:remote|client)\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"error\x5c":\x5c"(.*?[^\x5c])\x5c"|()))(?=(?|.*?"result\x5c":(\w+)|()))(?=(?|.*?"(?:is)?[sS]peculative\x5c":(\w+)|()))(?=(?|.*?"isClusterMember\x5c":(\w+)|()))(?=(?|.*?"driver\x5c":\{\x5c"name\x5c":\x5c"([^\x5c]*).*?"version\x5c":\x5c"([^\x5c]*)|()()))(?=(?|.*?"platform\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"os\x5c":\{\x5c"type\x5c":\x5c"([^\x5c]*).*?"architecture\x5c":\x5c"([^\x5c]*)|()()))(?=(?|.*?"application\x5c":\{\x5c"name\x5c":\x5c"(.*?[^\x5c])\x5c"|()))(?=(?|.*?"micros\x5c":(\d+)|()))</regex>
   <order>mongodb.user, mongodb.db, mongodb.mechanism, mongodb.remote, mongodb.error, mongodb.result, mongodb.speculative, mongodb.is_cluster_member, mongodb.driver_name, mongodb.driver_version, mongodb.platform, mongodb.os_type, mongodb.os_arch, mongodb.app_name, mongodb.conversation_micros</order>
 </decoder>
 
-<!-- connection messages -->
-<decoder name="mongodb-atlas">
-  <parent>json</parent>
+<decoder name="mongodb-atlas-fields">
+  <parent>mongodb-atlas</parent>
   <regex type="pcre2">\x5c"msg\x5c":\x5c"Connection (?:accepted|ended)\x5c"(?=(?|.*?"remote\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"local\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"connectionId\x5c":(\d+)|()))(?=(?|.*?"connectionCount\x5c":(\d+)|()))(?=(?|.*?"\$uuid\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"isLoadBalanced\x5c":(\w+)|()))(?=(?|.*?"isProxyUnixSock\x5c":(\w+)|()))(?=(?|.*?"sourceClient\x5c":\x5c"([^\x5c]*)|()))</regex>
   <order>mongodb.remote, mongodb.local, mongodb.connection_id, mongodb.connection_count, mongodb.connection_uuid, mongodb.is_load_balanced, mongodb.is_proxy_unix_sock, mongodb.source_client</order>
 </decoder>
 
-<!-- every other line: slow queries, command errors, anything else -->
-<decoder name="mongodb-atlas">
-  <parent>json</parent>
+<decoder name="mongodb-atlas-fields">
+  <parent>mongodb-atlas</parent>
   <regex type="pcre2">^(?!.*\x5c"msg\x5c":\x5c"(?:Authentication |Successfully authenticated|Connection ))(?=(?|.*?"ns\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"type\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"command\x5c":\{\x5c"(\w+)|()))(?=(?|.*?"durationMillis\x5c":(\d+)|()))(?=(?|.*?"planSummary\x5c":\x5c"(.*?[^\x5c])\x5c"|()))(?=(?|.*?"keysExamined\x5c":(\d+)|()))(?=(?|.*?"docsExamined\x5c":(\d+)|()))(?=(?|.*?"nreturned\x5c":(\d+)|()))(?=(?|.*?"reslen\x5c":(\d+)|()))(?=(?|.*?"appName\x5c":\x5c"(.*?[^\x5c])\x5c"|()))(?=(?|.*?"remote\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"errmsg\x5c":\x5c"(.*?[^\x5c])\x5c"|()))(?=(?|.*?"code\x5c":(\d+)|()))(?=(?|.*?"codeName\x5c":\x5c"(\w+)|()))(?=(?|.*?"error\x5c":\x5c"(.*?[^\x5c])\x5c"|()))</regex>
   <order>mongodb.ns, mongodb.type, mongodb.command, mongodb.duration_ms, mongodb.plan_summary, mongodb.keys_examined, mongodb.docs_examined, mongodb.nreturned, mongodb.reslen, mongodb.app_name, mongodb.remote, mongodb.errmsg, mongodb.code, mongodb.code_name, mongodb.error</order>
 </decoder>
 
-<!-- mongod-audit and mongos-audit lines: envelope through the JSON plugin -->
+<!-- mongod-audit and mongos-audit lines -->
 <decoder name="mongodb-atlas-audit">
-  <parent>json</parent>
-  <prematch type="pcre2">"mongodb\.log\.type": ?"mongo[ds]-audit"</prematch>
+  <prematch type="pcre2">^\{"integration": ?"aws".*"mongodb\.log\.type": ?"mongo[ds]-audit"</prematch>
+</decoder>
+
+<decoder name="mongodb-atlas-audit-fields">
+  <parent>mongodb-atlas-audit</parent>
   <plugin_decoder>JSON_Decoder</plugin_decoder>
 </decoder>
 
-<decoder name="mongodb-atlas-audit">
-  <parent>json</parent>
+<decoder name="mongodb-atlas-audit-fields">
+  <parent>mongodb-atlas-audit</parent>
   <regex type="pcre2">\x5c"atype\x5c":\x5c"(\w+)(?=(?|.*?"local\x5c":\{\x5c"ip\x5c":\x5c"([^\x5c]*)\x5c",\x5c"port\x5c":(\d+)|()()))(?=(?|.*?"remote\x5c":\{\x5c"ip\x5c":\x5c"([^\x5c]*)\x5c",\x5c"port\x5c":(\d+)|()()))(?=(?|.*?"users\x5c":\[\{\x5c"user\x5c":\x5c"([^\x5c]*)\x5c",\x5c"db\x5c":\x5c"([^\x5c]*)|.*?"param\x5c":\{[^}]*?"user\x5c":\x5c"([^\x5c]*)\x5c",\x5c"db\x5c":\x5c"([^\x5c]*)|()()))(?=(?|.*?"mechanism\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"ns\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"result\x5c":(\d+)|()))</regex>
   <order>mongodb.atype, mongodb.local_ip, mongodb.local_port, mongodb.remote_ip, mongodb.remote_port, mongodb.user, mongodb.db, mongodb.mechanism, mongodb.ns, mongodb.result</order>
-</decoder>
-
-<!-- every other JSON event: the standard JSON decoder. Required, keep last. -->
-<decoder name="json-default">
-  <parent>json</parent>
-  <plugin_decoder>JSON_Decoder</plugin_decoder>
 </decoder>

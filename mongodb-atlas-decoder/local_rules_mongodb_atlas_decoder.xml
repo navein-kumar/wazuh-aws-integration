@@ -1,7 +1,6 @@
 <!--
-  Rules for MongoDB Atlas logs decoded by local_decoder_mongodb_atlas.xml (fields mongodb.*).
-  The envelope fields come from the JSON decoder as aws.*, so the rules chain from the built in AWS
-  rule 80200 like every other AWS source.
+  Rules for MongoDB Atlas logs decoded by 0005-mongodb-atlas-decoders.xml (fields mongodb.* from the
+  decoder, aws.* from the JSON plugin). The base rules match on the decoder name.
   Install: copy to /var/ossec/etc/rules/ (owner root:wazuh, mode 660). Remove any older MongoDB rules
   with ids 100220 to 100233 from local_rules.xml first, then
     /var/ossec/bin/wazuh-analysisd -t and systemctl restart wazuh-manager
@@ -10,8 +9,7 @@
 
   <!-- mongod and mongos lines -->
   <rule id="100220" level="3">
-    <if_sid>80200</if_sid>
-    <field name="mongodb.component">\.+</field>
+    <decoded_as>mongodb-atlas</decoded_as>
     <description>MongoDB Atlas [$(aws.mongodb.customer.cluster.name)] $(mongodb.component): $(mongodb.msg)</description>
   </rule>
 
@@ -69,8 +67,7 @@
 
   <!-- audit lines -->
   <rule id="100230" level="3">
-    <if_sid>80200</if_sid>
-    <field name="mongodb.atype">\.+</field>
+    <decoded_as>mongodb-atlas-audit</decoded_as>
     <description>MongoDB Atlas audit [$(aws.mongodb.customer.cluster.name)]: $(mongodb.atype) by $(mongodb.user) from $(mongodb.remote_ip), result $(mongodb.result)</description>
   </rule>
 
