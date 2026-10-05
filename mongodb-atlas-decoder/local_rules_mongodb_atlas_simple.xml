@@ -1,0 +1,91 @@
+<!--
+  MongoDB Atlas rules WITHOUT a custom decoder, in the style of the Wazuh blog
+  "Monitoring MongoDB Atlas with Wazuh": the Atlas line stays a string in aws.log and the rules match
+  text inside it. Nothing is extracted into fields, so descriptions cannot show the user or address
+  and no correlation by client address is possible, but there is no decoder to maintain and the
+  built in JSON handling is untouched.
+  Use either this file or local_rules_mongodb_atlas_decoder.xml with its decoder, not both (same ids).
+  Install: copy to /var/ossec/etc/rules/ (owner root:wazuh, mode 660), then
+    /var/ossec/bin/wazuh-analysisd -t and systemctl restart wazuh-manager
+-->
+<group name="aws,mongodb,mongodb_atlas,">
+
+  <rule id="100220" level="3">
+    <if_sid>80200</if_sid>
+    <field name="aws.service.name">^mongodb$</field>
+    <description>MongoDB Atlas [$(aws.mongodb.customer.cluster.name)] $(aws.mongodb.log.type) line on $(aws.host.name)</description>
+  </rule>
+
+  <rule id="100221" level="7">
+    <if_sid>100220</if_sid>
+    <field name="aws.log">"msg":"Authentication failed"</field>
+    <description>MongoDB Atlas [$(aws.mongodb.customer.cluster.name)]: authentication failed, see full log for user and address</description>
+    <group>authentication_failed,</group>
+  </rule>
+
+  <rule id="100222" level="10" frequency="8" timeframe="120">
+    <if_matched_sid>100221</if_matched_sid>
+    <same_field>aws.host.name</same_field>
+    <description>MongoDB Atlas [$(aws.mongodb.customer.cluster.name)]: multiple authentication failures on $(aws.host.name)</description>
+    <group>authentication_failures,</group>
+  </rule>
+
+  <rule id="100223" level="3">
+    <if_sid>100220</if_sid>
+    <field name="aws.log">"msg":"Authentication succeeded"|"msg":"Successfully authenticated"</field>
+    <description>MongoDB Atlas [$(aws.mongodb.customer.cluster.name)]: user authenticated</description>
+    <group>authentication_success,</group>
+  </rule>
+
+  <rule id="100224" level="5">
+    <if_sid>100220</if_sid>
+    <field name="aws.log">"s":"E"|"s":"F"</field>
+    <description>MongoDB Atlas [$(aws.mongodb.customer.cluster.name)]: server error or fatal message</description>
+  </rule>
+
+  <rule id="100225" level="5">
+    <if_sid>100220</if_sid>
+    <field name="aws.log">"msg":"Slow query"</field>
+    <description>MongoDB Atlas [$(aws.mongodb.customer.cluster.name)]: slow query</description>
+  </rule>
+
+  <rule id="100226" level="7">
+    <if_sid>100220</if_sid>
+    <field name="aws.log">"codeName":"Unauthorized"</field>
+    <description>MongoDB Atlas [$(aws.mongodb.customer.cluster.name)]: unauthorized command</description>
+    <group>access_denied,</group>
+  </rule>
+
+  <rule id="100227" level="3">
+    <if_sid>100220</if_sid>
+    <field name="aws.log">"msg":"Connection accepted"|"msg":"Connection ended"</field>
+    <description>MongoDB Atlas [$(aws.mongodb.customer.cluster.name)]: connection accepted or ended</description>
+  </rule>
+
+  <rule id="100228" level="3">
+    <if_sid>100220</if_sid>
+    <field name="aws.log">"msg":"Connection not authenticating"</field>
+    <description>MongoDB Atlas [$(aws.mongodb.customer.cluster.name)]: connection closed without authenticating</description>
+  </rule>
+
+  <rule id="100231" level="8">
+    <if_sid>100220</if_sid>
+    <field name="aws.log">"atype":"createUser"|"atype":"dropUser"|"atype":"updateUser"|"atype":"grantRolesToUser"|"atype":"revokeRolesFromUser"|"atype":"createRole"|"atype":"dropRole"</field>
+    <description>MongoDB Atlas audit [$(aws.mongodb.customer.cluster.name)]: user or role change</description>
+  </rule>
+
+  <rule id="100232" level="8">
+    <if_sid>100220</if_sid>
+    <field name="aws.log">"atype":"dropDatabase"|"atype":"dropCollection"|"atype":"shutdown"|"msg":"dropDatabase"</field>
+    <description>MongoDB Atlas audit [$(aws.mongodb.customer.cluster.name)]: destructive operation</description>
+  </rule>
+
+  <rule id="100233" level="7">
+    <if_sid>100220</if_sid>
+    <field name="aws.log">"atype":"authenticate"</field>
+    <field name="aws.log">"result":18</field>
+    <description>MongoDB Atlas audit [$(aws.mongodb.customer.cluster.name)]: authentication failure</description>
+    <group>authentication_failed,</group>
+  </rule>
+
+</group>

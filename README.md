@@ -52,7 +52,14 @@ The loop is one bash script, one config file and one rules file. See the
 
 Atlas log export writes each mongod line as a JSON string inside a JSON envelope. Wazuh's JSON
 decoder does not parse a JSON string nested in JSON, so the inner fields were invisible to rules.
-The decoder in [mongodb-atlas-decoder](mongodb-atlas-decoder/) reads them out with regex and
-publishes them as `mongodb.*` fields, covering authentication, connection, slow query, command error
-and audit lines. The rules file raises alerts on failed logins, unauthorized commands, slow queries
-and audit events. Install notes are in the header of each file.
+The folder [mongodb-atlas-decoder](mongodb-atlas-decoder/) offers two ways to handle that:
+
+- `local_decoder_mongodb_atlas.xml` with `local_rules_mongodb_atlas_decoder.xml`: sibling decoders
+  under the built in `json` decoder, as described in the Wazuh documentation, read the inner fields
+  out with regex and publish them as `mongodb.*` fields (user, client address, database, connection
+  details, slow query details, audit details). Rules show those values and can correlate on them.
+- `local_rules_mongodb_atlas_simple.xml` alone: no decoder, the rules match text inside the `aws.log`
+  string, the approach used in the Wazuh blog on monitoring MongoDB Atlas. Nothing to maintain, but
+  no fields, so descriptions cannot show the user or address.
+
+Use one or the other, not both. Install notes are in the header of each file.
