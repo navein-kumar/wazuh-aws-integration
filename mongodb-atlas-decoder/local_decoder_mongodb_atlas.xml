@@ -19,7 +19,15 @@
                          then:   audit fields
     json-default         no prematch, JSON plugin: every other JSON event (CloudTrail, GuardDuty, ...).
                          Required and must stay last: once the json decoder has children, Wazuh no
-                         longer runs its own parsing for an event no child claims.
+                         longer runs its own parsing for an event no child claims. It runs the same
+                         plugin the built in json decoder runs, so those events decode exactly as
+                         before. Verified with CloudTrail, GuardDuty, aws-loop, plain application JSON
+                         and Windows JSON events.
+  Load order: Wazuh loads decoder files sorted by file name, and children of json are tried in that
+  order. If any other custom decoder file in /var/ossec/etc/decoders/ also uses <parent>json</parent>,
+  this file must load after it, so that json-default is the last child. Naming this file with a
+  prefix that sorts last, for example zz_mongodb_atlas.xml, guarantees that. With no other custom
+  json children the name does not matter.
   \x5c is a literal backslash: the raw event contains \" around every inner value.
   Attr values are read with optional lookaheads (?=(?|.*?"KEY\x5c":\x5c"([^\x5c]*)|())): the field
   holds the value when the key exists and is empty when it does not, in any order. Keys that appear
