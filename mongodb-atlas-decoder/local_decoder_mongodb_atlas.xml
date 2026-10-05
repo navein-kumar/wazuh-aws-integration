@@ -19,6 +19,10 @@
     families by message and the syntax is kept short. The last mongod decoder has no message filter
     and takes every other line. Wazuh tries the children in file order and the first prematch wins.
     Only one child decoder is ever applied to an event, so fields cannot be spread over siblings.
+    The last decoder, json-default, has no prematch and runs the normal JSON decoder for every event
+    the MongoDB decoders do not claim. Do not remove it and keep it last: Wazuh skips the parent's
+    own JSON parsing once the json decoder has children, which would leave all other JSON sources
+    undecoded.
 
   Fields on every mongod/mongos line:
     mongodb.severity, mongodb.component, mongodb.id, mongodb.ctx, mongodb.msg,
@@ -75,4 +79,14 @@
   <prematch type="pcre2">"mongodb\.log\.type": ?"mongo[ds]-audit"</prematch>
   <regex type="pcre2">\x5c"atype\x5c":\x5c"(\w+)(?=(?|.*?"local\x5c":\{\x5c"ip\x5c":\x5c"([^\x5c]*)\x5c",\x5c"port\x5c":(\d+)|()()))(?=(?|.*?"remote\x5c":\{\x5c"ip\x5c":\x5c"([^\x5c]*)\x5c",\x5c"port\x5c":(\d+)|()()))(?=(?|.*?"users\x5c":\[\{\x5c"user\x5c":\x5c"([^\x5c]*)\x5c",\x5c"db\x5c":\x5c"([^\x5c]*)|.*?"param\x5c":\{[^}]*?"user\x5c":\x5c"([^\x5c]*)\x5c",\x5c"db\x5c":\x5c"([^\x5c]*)|()()))(?=(?|.*?"mechanism\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"ns\x5c":\x5c"([^\x5c]*)|()))(?=(?|.*?"result\x5c":(\d+)|())).*?host.name": ?"([^"]*)".*?group.id": ?"([^"]*)".*?cluster.name": ?"([^"]*)".*?cluster.name": ?"([^"]*)".*?log.type": ?"([^"]*)".*?timestamp": ?"([^"]*)"</regex>
   <order>mongodb.atype, mongodb.local_ip, mongodb.local_port, mongodb.remote_ip, mongodb.remote_port, mongodb.user, mongodb.db, mongodb.mechanism, mongodb.ns, mongodb.result, mongodb.host, mongodb.group_id, mongodb.cluster_id, mongodb.cluster, mongodb.log_type, mongodb.timestamp</order>
+</decoder>
+
+<!-- every other JSON event: run the standard JSON decoder. Required and must stay last.
+     Once the built in json decoder has children, Wazuh no longer runs its own JSON parsing for an
+     event that no child claims, so without this child every other JSON source (CloudTrail, GuardDuty,
+     CloudFront, ...) would arrive undecoded. A child with no prematch is where Wazuh stops looking,
+     and the event keeps the decoder name json, so rule 80200 and all AWS rules work as before. -->
+<decoder name="json-default">
+  <parent>json</parent>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
 </decoder>
